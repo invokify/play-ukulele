@@ -128,11 +128,16 @@ export class UkeAudio {
     };
   }
 
-  /** notes : [{ string, midi }] — au-delà de 2 notes, on gratte de G vers A. */
-  playColumn(notes, when) {
+  /**
+   * notes : [{ string, midi }] — au-delà de 2 notes, l'accord est gratté :
+   * de G vers A (vers le bas, « d ») ou de A vers G (vers le haut, « u », plus léger).
+   */
+  playColumn(notes, when, dir = 'd') {
     const sorted = [...notes].sort((a, b) => STRUM_ORDER.indexOf(a.string) - STRUM_ORDER.indexOf(b.string));
-    const strum = sorted.length >= 3 ? 0.014 : 0;
-    sorted.forEach((n, i) => this.playNote(n.midi, when + i * strum, n.string, 0.72 + Math.random() * 0.1));
+    if (dir === 'u') sorted.reverse();
+    const strum = sorted.length >= 3 ? (dir === 'u' ? 0.011 : 0.014) : 0;
+    const base = dir === 'u' ? 0.5 : 0.72;
+    sorted.forEach((n, i) => this.playNote(n.midi, when + i * strum, n.string, base + Math.random() * 0.1));
   }
 
   click(when, accent = false) {

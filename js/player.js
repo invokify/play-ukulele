@@ -69,7 +69,8 @@ export class Player {
       if (col.notes.length) {
         this.audio.playColumn(
           col.notes.map((n) => ({ string: n.string, midi: this.tuning[n.string] + n.fret })),
-          this.nextTime
+          this.nextTime,
+          col.dir || 'd'
         );
       }
       if (this.metronome && col.step % this.cpb === 0) {
