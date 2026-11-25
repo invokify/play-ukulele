@@ -33,20 +33,21 @@
             <label class="field">Tempo (BPM)
               <input id="f-bpm" type="number" min="30" max="240" value="90" required>
             </label>
-            <label class="field">Tirets par temps
+            <label class="field" id="f-cpb-field">Tirets par temps
               <input id="f-cpb" type="number" min="1" max="16" value="4" required>
               <small>Nombre de caractères de tablature pour un temps.</small>
             </label>
           </div>
-          <label class="field">Tablature
+          <label class="field">Tablature ou accords
             <textarea id="f-tab" rows="14" spellcheck="false" autocomplete="off"
-              placeholder="Collez votre tablature ici (lignes A|, E|, C|, G|)…"></textarea>
+              placeholder="Collez une tablature (lignes A|, E|, C|, G|) ou une grille d'accords (accords au-dessus des paroles)…"></textarea>
           </label>
           <p id="f-preview" class="hint" aria-live="polite"></p>
           <div class="actions">
             <button type="submit" class="primary">Enregistrer</button>
             <button type="button" id="btn-cancel">Annuler</button>
-            <button type="button" id="btn-example" class="ghost">Insérer un exemple</button>
+            <button type="button" id="btn-example" class="ghost">Exemple tablature</button>
+            <button type="button" id="btn-example-chords" class="ghost">Exemple accords</button>
           </div>
         </form>
       </section>
@@ -80,8 +81,14 @@
             <label class="ctl"><span>Vitesse d'entraînement <output id="speed-out">100 %</output></span>
               <input id="speed" type="range" min="25" max="150" step="5" value="100">
             </label>
-            <label class="ctl small">Tirets / temps
+            <label class="ctl small" id="ctl-cpb">Tirets / temps
               <input id="cpb" type="number" min="1" max="16" value="4">
+            </label>
+            <label class="ctl small" id="ctl-bpc" hidden>Temps par accord
+              <input id="bpc" type="number" min="1" max="16" value="4">
+            </label>
+            <label class="ctl small" id="ctl-strum" hidden>Rythme
+              <select id="strum"></select>
             </label>
             <label class="ctl small">Partie
               <select id="section"><option value="">Toute la chanson</option></select>
@@ -116,6 +123,7 @@
         <div class="card">
           <div id="warnings" class="warnings" hidden></div>
           <div id="tab" class="tab-view" tabindex="0" aria-label="Tablature"></div>
+          <div id="sheet" class="sheet-view" aria-label="Accords et paroles" hidden></div>
         </div>
       </section>
 

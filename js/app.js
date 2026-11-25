@@ -3,6 +3,8 @@ import { UkeAudio } from './audio.js';
 import { Player } from './player.js';
 import { Fretboard } from './fretboard.js';
 import { TabView } from './tabview.js';
+import { SheetView } from './sheetview.js';
+import { parseChordSheet, chordShape, STRUMS } from './chordsheet.js';
 import { describe, noteName, pitchClass } from './chords.js';
 import * as store from './storage.js';
 
@@ -36,6 +38,24 @@ E|--0---1---3---------------------------3---1---0-|
 C|0-----------------------------------------------|
 G|------------------------------------------------|`;
 
+const EXAMPLE_CHORDS = `[Couplet]
+C
+Frère Jacques, frère Jacques,
+C
+Dormez-vous ? Dormez-vous ?
+C G7 C
+Sonnez les matines, sonnez les matines
+C G7 C
+Ding, daing, dong ! Ding, daing, dong !
+
+[Variation]
+C Am
+Frère Jacques, frère Jacques,
+F G7
+Dormez-vous ? Dormez-vous ?
+
+End on C`;
+
 const $ = (id) => document.getElementById(id);
 
 // ---------- État ----------
@@ -48,6 +68,7 @@ const prefs = { tuning: 'high', speed: 100, metronome: false, loop: false, ...st
 let current = null; // chanson affichée
 let parsed = null;
 let editingId = null;
+let editorOpts = { beatsPerChord: 4, strum: 'island' };
 let shownCol = -1; // dernière colonne contenant des notes affichée sur le manche
 
 const audio = new UkeAudio();
@@ -70,6 +91,27 @@ const fretboard = new Fretboard($('fretboard'), {
   },
 });
 const tabView = new TabView($('tab'), { onSeek: (i) => seek(i, true) });
+const sheetView = new SheetView($('sheet'), { onSeek: (i) => seek(i, true), onAudition: auditionChord });
+
+/** Détecte le format : tablature (lignes A|E|C|G) ou grille d'accords au-dessus des paroles. */
+function parseSong(text, opts = {}) {
+  const tab = parseTab(text);
+  if (tab.noteCount) return { ...tab, kind: 'tab' };
+  const sheet = parseChordSheet(text, opts);
+  return sheet.chords.length ? sheet : { ...tab, kind: 'tab' };
+}
+
+const isChords = () => parsed?.kind === 'chords';
+
+function auditionChord(name) {
+  const shape = chordShape(name);
+  if (!shape) return;
+  const notes = ['G', 'C', 'E', 'A'].map((s) => ({ string: s, fret: shape[s] }));
+  audio.playColumn(notes.map((n) => ({ string: n.string, midi: tuning()[n.string] + n.fret })), 0);
+  fretboard.show(notes.map((n) => ({ ...n, label: n.fret })), []);
+  fretboard.pluck(['G', 'C', 'E', 'A']);
+  setNow({ title: name, subtitle: 'accord · ' + notes.map((n) => noteName(tuning()[n.string] + n.fret)).join(' ') }, notes);
+}
 
 const tuning = () => TUNINGS[prefs.tuning] || TUNINGS.high;
 
@@ -105,6 +147,7 @@ function openEditor(song = null) {
   $('f-title').value = song?.title ?? '';
   $('f-bpm').value = song?.bpm ?? 90;
   $('f-cpb').value = song?.cpb ?? 4;
+  editorOpts = { beatsPerChord: song?.beatsPerChord ?? 4, strum: song?.strum ?? 'island' };
   $('f-tab').value = song?.tab ?? '';
   updatePreview();
   showView('view-editor');
@@ -112,13 +155,16 @@ function openEditor(song = null) {
 }
 
 function updatePreview() {
-  const p = parseTab($('f-tab').value);
+  const p = parseSong($('f-tab').value, editorOpts);
   const out = $('f-preview');
+  $('f-cpb-field').hidden = p.kind === 'chords';
   if (!$('f-tab').value.trim()) {
-    out.textContent = 'Les lignes A|, E|, C|, G| sont reconnues ; les titres entre crochets ([Intro], [Refrain]…) deviennent des parties.';
+    out.textContent = 'Deux formats reconnus : tablature (lignes A|, E|, C|, G|) ou grille d\'accords (accords au-dessus des paroles). Les titres entre crochets ([Intro], [Refrain]…) deviennent des parties.';
     return;
   }
-  const parts = [`${p.noteCount} note(s) sur ${p.totalSteps} pas de temps`];
+  const parts = p.kind === 'chords'
+    ? [`Grille d'accords : ${p.chords.length} accord(s), dont ${new Set(p.chords.map((c) => c.name)).size} différent(s) (${[...new Set(p.chords.map((c) => c.name))].join(', ')})`]
+    : [`Tablature : ${p.noteCount} note(s) sur ${p.totalSteps} pas de temps`];
   if (p.sections.length) parts.push(`parties : ${p.sections.map((s) => s.name).join(', ')}`);
   out.textContent = '✓ ' + parts.join(' · ') + (p.warnings.length ? ' — ⚠ ' + p.warnings.join(' ') : '');
 }
@@ -127,6 +173,11 @@ $('f-tab').addEventListener('input', updatePreview);
 $('btn-example').addEventListener('click', () => {
   $('f-tab').value = EXAMPLE_TAB;
   if (!$('f-title').value) $('f-title').value = 'Exemple – Intro & accords';
+  updatePreview();
+});
+$('btn-example-chords').addEventListener('click', () => {
+  $('f-tab').value = EXAMPLE_CHORDS;
+  if (!$('f-title').value) $('f-title').value = 'Exemple – Frère Jacques (accords)';
   updatePreview();
 });
 $('btn-cancel').addEventListener('click', () => (current ? openSong(current.id) : showView(songs.length ? 'view-song' : 'view-empty')));
@@ -139,8 +190,8 @@ $('editor-form').addEventListener('submit', (e) => {
     bpm: clamp(+$('f-bpm').value || 90, 30, 240),
     cpb: clamp(+$('f-cpb').value || 4, 1, 16),
   };
-  if (!parseTab(data.tab).noteCount) {
-    $('f-preview').textContent = '⚠ Aucune note reconnue : vérifiez que la tablature contient des lignes A|, E|, C|, G|.';
+  if (!parseSong(data.tab).noteCount) {
+    $('f-preview').textContent = '⚠ Rien de jouable : collez une tablature (lignes A|, E|, C|, G|) ou des accords au-dessus des paroles.';
     $('f-tab').focus();
     return;
   }
@@ -156,20 +207,26 @@ $('editor-form').addEventListener('submit', (e) => {
 });
 
 // ---------- Lecteur ----------
-function openSong(id) {
+function openSong(id, { keepChord = null } = {}) {
   const song = songs.find((s) => s.id === id);
   if (!song) return;
   player.stop();
   current = song;
-  parsed = parseTab(song.tab);
+  parsed = parseSong(song.tab, { beatsPerChord: song.beatsPerChord ?? 4, strum: song.strum ?? 'island' });
   player.load(parsed);
   player.tuning = tuning();
   player.bpm = song.bpm;
-  player.cpb = song.cpb;
+  player.cpb = isChords() ? parsed.cpb : song.cpb;
 
   $('song-title').textContent = song.title;
   $('bpm').value = song.bpm;
   $('cpb').value = song.cpb;
+  $('bpc').value = song.beatsPerChord ?? 4;
+  $('strum').value = song.strum ?? 'island';
+  $('ctl-cpb').hidden = isChords();
+  $('ctl-bpc').hidden = $('ctl-strum').hidden = !isChords();
+  $('tab').hidden = isChords();
+  $('sheet').hidden = !isChords();
 
   const sel = $('section');
   sel.replaceChildren(new Option('Toute la chanson', ''));
@@ -182,10 +239,11 @@ function openSong(id) {
 
   $('seek').max = Math.max(0, parsed.totalSteps - 1);
   showView('view-song');
-  tabView.setData(parsed);
+  if (isChords()) sheetView.setData(parsed);
+  else tabView.setData(parsed);
   shownCol = -1;
   updateSettings();
-  const first = noteCol(0, 1);
+  const first = keepChord != null && parsed.chords?.[keepChord] ? parsed.chords[keepChord].firstCol : noteCol(0, 1);
   if (first >= 0) {
     player.position = first;
     showColumn(first, { pluck: false, scroll: false });
@@ -200,6 +258,18 @@ const noteCol = (i, dir) => {
   for (let k = i; k >= 0 && k < parsed.columns.length; k += dir) if (parsed.columns[k].notes.length) return k;
   return -1;
 };
+
+const notesKey = (col) => col.notes.map((n) => n.string + n.fret).join(',');
+
+/** Prochaine colonne dont les notes diffèrent de la colonne nc (aperçu sur le manche). */
+function nextDifferent(nc) {
+  const key = notesKey(parsed.columns[nc]);
+  for (let k = nc + 1; k < parsed.columns.length; k++) {
+    const c = parsed.columns[k];
+    if (c.notes.length && notesKey(c) !== key) return k;
+  }
+  return -1;
+}
 
 function midisOf(col) {
   return col.notes.map((n) => tuning()[n.string] + n.fret);
@@ -224,7 +294,8 @@ function setNow(desc, notes) {
 function showColumn(i, { pluck = false, scroll = true } = {}) {
   const col = parsed.columns[i];
   if (!col) return;
-  tabView.highlight(i, scroll);
+  if (isChords()) sheetView.highlight(col.chord, scroll);
+  else tabView.highlight(i, scroll);
   $('seek').value = col.step;
   updateBeat(col.step);
   updateTime(col.step);
@@ -232,14 +303,21 @@ function showColumn(i, { pluck = false, scroll = true } = {}) {
   const nc = col.notes.length ? i : noteCol(i, -1);
   if (nc >= 0 && (nc !== shownCol || pluck)) {
     const c = parsed.columns[nc];
-    const nextIdx = noteCol(nc + 1, 1);
+    const nextIdx = nextDifferent(nc);
     const ghost = nextIdx >= 0 ? parsed.columns[nextIdx].notes : [];
     fretboard.show(
       c.notes.map((n) => ({ ...n, label: n.fret })),
       ghost
     );
     if (pluck && col.notes.length) fretboard.pluck(col.notes.map((n) => n.string));
-    setNow(describe(midisOf(c)), c.notes);
+    if (isChords()) {
+      const name = parsed.chords[c.chord].name;
+      const next = nextIdx >= 0 ? parsed.chords[parsed.columns[nextIdx].chord].name : null;
+      const notes = [...midisOf(c)].sort((a, b) => a - b).map(noteName).join(' ');
+      setNow({ title: name, subtitle: `accord · ${notes}` + (next ? ` · ensuite : ${next}` : '') }, c.notes);
+    } else {
+      setNow(describe(midisOf(c)), c.notes);
+    }
     shownCol = nc;
   }
 }
@@ -265,13 +343,19 @@ function seek(i, audition = false) {
   showColumn(i, { pluck: audition, scroll: true });
   if (wasPlaying) player.play(i);
   else if (audition && parsed.columns[i].notes.length) {
-    audio.playColumn(parsed.columns[i].notes.map((n) => ({ string: n.string, midi: tuning()[n.string] + n.fret })), 0);
+    audio.playColumn(parsed.columns[i].notes.map((n) => ({ string: n.string, midi: tuning()[n.string] + n.fret })), 0, parsed.columns[i].dir || 'd');
   }
 }
 
 function step(dir) {
   if (!parsed) return;
   player.pause();
+  if (isChords()) {
+    const cur = parsed.columns[player.position]?.chord ?? -1;
+    const target = parsed.chords[clamp(cur + dir, 0, parsed.chords.length - 1)];
+    if (target) seek(target.firstCol, true);
+    return;
+  }
   let i = player.position < 0 ? 0 : player.position + dir;
   // Saute jusqu'à la prochaine colonne contenant des notes.
   while (i >= 0 && i < parsed.columns.length && !parsed.columns[i].notes.length) i += dir;
@@ -281,7 +365,7 @@ function step(dir) {
 function updateSettings() {
   if (!current) return;
   player.bpm = clamp(+$('bpm').value, 30, 240);
-  player.cpb = clamp(+$('cpb').value || 4, 1, 16);
+  player.cpb = isChords() ? parsed.cpb : clamp(+$('cpb').value || 4, 1, 16);
   player.speed = prefs.speed / 100;
   player.metronome = prefs.metronome;
   player.loop = prefs.loop;
@@ -297,20 +381,37 @@ function updateSettings() {
 
   const eff = Math.round(player.bpm * player.speed);
   const noteDur = Math.round(player.sps * 1000);
-  $('effective').textContent =
-    `Tempo effectif : ${eff} BPM · 1 tiret = ${noteDur} ms · 1 temps = ${player.cpb} tirets`;
+  const beatSec = (60 / (player.bpm * player.speed)).toFixed(2).replace('.', ',');
+  $('effective').textContent = isChords()
+    ? `Tempo effectif : ${eff} BPM · 1 temps = ${beatSec} s · chaque accord dure ${current.beatsPerChord ?? 4} temps`
+    : `Tempo effectif : ${eff} BPM · 1 tiret = ${noteDur} ms · 1 temps = ${player.cpb} tirets`;
   updateTime();
 }
 
 function persistSong() {
   if (!current) return;
   current.bpm = player.bpm;
-  current.cpb = player.cpb;
+  if (!isChords()) current.cpb = player.cpb;
   store.saveSongs(songs);
 }
 
 $('bpm').addEventListener('input', () => { updateSettings(); persistSong(); });
 $('cpb').addEventListener('change', () => { updateSettings(); persistSong(); });
+
+// Réglages propres aux grilles d'accords : on régénère le rythme en restant sur l'accord courant.
+for (const o of Object.entries(STRUMS)) $('strum').appendChild(new Option(o[1].label, o[0]));
+function rebuildChords() {
+  if (!current || !isChords()) return;
+  current.beatsPerChord = clamp(+$('bpc').value || 4, 1, 16);
+  current.strum = $('strum').value;
+  store.saveSongs(songs);
+  const wasPlaying = player.playing;
+  const keepChord = parsed.columns[player.position]?.chord ?? null;
+  openSong(current.id, { keepChord });
+  if (wasPlaying) player.play();
+}
+$('bpc').addEventListener('change', rebuildChords);
+$('strum').addEventListener('change', rebuildChords);
 $('speed').addEventListener('input', (e) => { prefs.speed = +e.target.value; store.savePrefs(prefs); updateSettings(); });
 $('metro').addEventListener('change', (e) => { prefs.metronome = e.target.checked; store.savePrefs(prefs); updateSettings(); });
 $('loop').addEventListener('change', (e) => { prefs.loop = e.target.checked; store.savePrefs(prefs); updateSettings(); });
